@@ -53,7 +53,8 @@ def encrypt(plaintext, key, size_block=64, n=2):
             left = block[0:size_block // 2]
             right = block[size_block // 2: size_block]
             temp = F(left, k_i) ^ right
-            new_block = right + temp
+            #new_block = right + temp
+            new_block = temp + left
             res += new_block
         plaintext = res
     return res
@@ -67,7 +68,8 @@ def decrypt(plaintext, key, size_block=64, n=2):
             left = block[0:size_block // 2]
             right = block[size_block // 2: size_block]
             temp = F(left, k_i) ^ right
-            new_block = right + temp
+            #new_block = right + temp
+            new_block = temp + left
             res += new_block
         plaintext = res
     return res
@@ -76,8 +78,10 @@ def decrypt(plaintext, key, size_block=64, n=2):
 input_string = b'Very very secret text'
 input_string = bytes([0] * (8 - len(input_string) % 8)) + input_string
 binput_string = bytestring2bitarray(input_string)
-key = bytearray(os.urandom(8))
-bkey = bytestring2bitarray(key)
-print(binput_string)
-print(encrypt(binput_string, bkey))
-print(decrypt(encrypt(binput_string, bkey), bkey))
+#key = bytearray(os.urandom(8))
+bkey = bitarray('1') * 64
+#bkey = bytestring2bitarray(key)
+print('исходн:', binput_string)
+print('_ключ_:', bkey)
+print('зашфрв:', encrypt(binput_string, bkey))
+print('расшфр:', decrypt(encrypt(binput_string, bkey), bkey))
