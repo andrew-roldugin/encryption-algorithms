@@ -81,6 +81,7 @@ binput_string = bytestring2bitarray(input_string)
 key = bytearray(os.urandom(8))
 # bkey = bitarray('1') * 64
 bkey = bytestring2bitarray(key)
+# TODO: нужна проверка, работает некорректно
 print('исходн:', binput_string)
 print('_ключ_:', bkey)
 print('зашфрв:', encrypt(binput_string, bkey))
