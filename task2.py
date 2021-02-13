@@ -3,14 +3,6 @@ import os
 from bitarray._bitarray import bitarray
 from bitarray.util import *
 
-def CBC_encrypt(encrypter, IV):
-    def wrapper(plaintext, key, n=2, size_block=64):
-        res = encrypt(plaintext, key, n, size_block)
-        CBC_res = bitarray()
-        for index_of_block in range(len(plaintext) // size_block):
-            block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-
-    return wrapper
 
 def right_shift(array, n):
     res = bitarray(len(array))
@@ -51,6 +43,21 @@ def F(left, key):
 def get_K_i(K, i):
     return right_shift(K, i * 8)[:32]
 
+def encrypt_block(block, key, n=2):
+    size_block = len(block)
+    for i in range(n):
+        res = bitarray()
+        k_i = get_K_i(key, i)
+        left = block[0:size_block // 2]
+        right = block[size_block // 2: size_block]
+        temp = F(left, k_i) ^ right
+        if i == n - 1:
+            new_block = left + temp
+        else:
+            new_block = temp + left
+        res += new_block
+        block = res
+    return block
 
 def encrypt(plaintext, key, n=2, size_block=64):
     for i in range(n):
