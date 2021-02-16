@@ -43,12 +43,13 @@ def F(left, key):
 def get_K_i(K, i):
     return right_shift(K, i * 8)[:32]
 
+
 def encrypt_block(block, key, n=2):
     size_block = len(block)
     for i in range(n):
         res = bitarray()
         k_i = get_K_i(key, i)
-        left = block[0:size_block // 2]
+        left = block[0: size_block // 2]
         right = block[size_block // 2: size_block]
         temp = F(left, k_i) ^ right
         if i == n - 1:
@@ -59,40 +60,76 @@ def encrypt_block(block, key, n=2):
         block = res
     return block
 
-def encrypt(plaintext, key, n=2, size_block=64):
-    for i in range(n):
-        res = bitarray()
-        k_i = get_K_i(key, i)
-        for index_of_block in range(len(plaintext) // size_block):
-            block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-            left = block[0:size_block // 2]
-            right = block[size_block // 2: size_block]
-            temp = F(left, k_i) ^ right
-            if i == n - 1:
-                new_block = left + temp
-            else:
-                new_block = temp + left
-            res += new_block
-        plaintext = res
-    return plaintext
 
-
-def decrypt(plaintext, key, n=2, size_block=64):
+def decrypt_block(block, key, n=2):
+    size_block = len(block)
     for i in range(n):
         res = bitarray()
         k_i = get_K_i(key, n - i - 1)
-        for index_of_block in range(len(plaintext) // size_block):
-            block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-            left = block[0:size_block // 2]
-            right = block[size_block // 2: size_block]
-            temp = F(left, k_i) ^ right
-            if i == n - 1:
-                new_block = left + temp
-            else:
-                new_block = temp + left
-            res += new_block
-        plaintext = res
-    return plaintext
+        left = block[0: size_block // 2]
+        right = block[size_block // 2: size_block]
+        temp = F(left, k_i) ^ right
+        if i == n - 1:
+            new_block = left + temp
+        else:
+            new_block = temp + left
+        res += new_block
+        block = res
+    return block
+
+
+def encrypt_CBC(plaintext, key, IV, n=2, size_block=64):
+    res = bitarray()
+    for index_of_block in range(len(plaintext) // size_block):
+        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
+        if index_of_block == 0:
+            block = block ^ IV
+        else:
+            block = block ^ res[size_block * (index_of_block - 1): size_block * index_of_block]
+        encrypted_block = encrypt_block(block, key, n)
+        res += encrypted_block
+    return res
+
+
+def decrypt_CBC(plaintext, key, IV, n=2, size_block=64):
+    res = bitarray()
+    for index_of_block in range(len(plaintext) // size_block):
+        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
+        decrypted_block = decrypt_block(block, key, n)
+        if index_of_block == 0:
+            decrypted_block = decrypted_block ^ IV
+        else:
+            decrypted_block = decrypted_block ^ plaintext[size_block * (index_of_block - 1): size_block * index_of_block]
+
+        res += decrypted_block
+    return res
+
+
+
+def encrypt_CFB(plaintext, key, IV, n=2, size_block=64):
+    res = bitarray()
+    for index_of_block in range(len(plaintext) // size_block):
+        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
+        if index_of_block == 0:
+            encrypted_block = encrypt_block(IV, key, n)
+        else:
+            encrypted_block = encrypt_block(res[size_block * (index_of_block - 1): size_block * index_of_block], key, n)
+        encrypted_block = encrypted_block ^ block
+        res += encrypted_block
+    return res
+
+
+def decrypt_CFB(plaintext, key, IV, n=2, size_block=64):
+    res = bitarray()
+    for index_of_block in range(len(plaintext) // size_block):
+        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
+        if index_of_block == 0:
+            decrypted_block = encrypt_block(IV, key, n) ^ block
+        else:
+            decrypted_block = encrypt_block(plaintext[size_block * (index_of_block - 1): size_block * index_of_block], key, n) ^ block
+
+        res += decrypted_block
+    return res
 
 
 input_string = b'Very very secret text'
@@ -102,8 +139,15 @@ key = bytearray(os.urandom(8))
 bkey = bytestring2bitarray(key)
 n = 10
 
+IV = bytestring2bitarray(bytearray(os.urandom(8)))
+
 print('исходн:', binput_string)
 print('_ключ_:', bkey)
-print('зашфрв:', encrypt(binput_string, bkey, n))
-print('расшфр:', decrypt(encrypt(binput_string, bkey, n), bkey, n))
-print('текст: ', ba2int(decrypt(encrypt(binput_string, bkey, n), bkey, n)).to_bytes(21, 'big').decode())
+print('CBC')
+print('зашфрв:', encrypt_CBC(binput_string, bkey, IV, n))
+print('расшфр:', decrypt_CBC(encrypt_CBC(binput_string, bkey, IV, n), bkey, IV, n))
+print('текст: ', ba2int(decrypt_CBC(encrypt_CBC(binput_string, bkey, IV, n), bkey, IV, n)).to_bytes(21, 'big').decode())
+print('CFB')
+print('зашфрв:', encrypt_CFB(binput_string, bkey, IV, n))
+print('расшфр:', decrypt_CFB(encrypt_CFB(binput_string, bkey, IV, n), bkey, IV, n))
+print('текст: ', ba2int(decrypt_CFB(encrypt_CFB(binput_string, bkey, IV, n), bkey, IV, n)).to_bytes(21, 'big').decode())
