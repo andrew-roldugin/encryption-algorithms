@@ -9,6 +9,7 @@ M = 101
 C = 1
 p = 2 ** 32
 
+flag = True
 
 def get_random(U, M, C, p):
     U_new = (U * M + C) % p
@@ -30,7 +31,7 @@ def get_random_array(length):
 def get_L():
     numbers = []
     U = [0]
-    global M, C, p
+    global M, C, p, flag
     R = []
     rand, num = get_random(U[-1], M, C, p)
     while num not in numbers:
@@ -38,9 +39,12 @@ def get_L():
         R.append(rand)
         numbers.append(num)
         rand, num = get_random(U[-1], M, C, p)
-        if len(R) > 10000:
-            print('Более 10000')
-            return len(U)
+        if len(R) > 10000 and flag:
+            print('Более 10000. Продолжить? Y/n')
+            if input() != 'Y':
+                return len(U)
+            else:
+                flag = False
 
     return len(R)
 
