@@ -14,8 +14,10 @@ Windows:
 
 Возможно будут проблемы с библиотекой pycrypto. Для него следует установить следующее ПО:
 https://visualstudio.microsoft.com/ru/vs/features/cplusplus/
+
 Как вариант альтернативный, можете установить скомпилированный пакет:
 https://www.lfd.uci.edu/~gohlke/pythonlibs/
+
 Еще вариант: стоит перекинуть в папку site-packages разорхивированные архивы:
 https://disk.yandex.ru/d/kCLeYXZvVO5ELw?w=1
 
