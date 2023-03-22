@@ -1,94 +1,140 @@
+import math
+import math
 import os
 
 from bitarray._bitarray import bitarray
-from bitarray.util import *
+from bitarray.util import ba2int, ba2hex
 
 
-def right_shift(array, n):
-    res = bitarray(len(array))
-    for i in range(len(array)):
-        res[i] = array[i]
-    for j in range(n):
-        for i in reversed(range(1, len(array))):
-            res[i] = array[i - 1]
-        res[0] = 0
-        array = res
-    return res
+def right_shift(block, n):
+    b = block if block.__class__ is bitarray else bitarray(block)
+    return b >> n
 
 
-def left_shift(array, n):
-    res = bitarray(len(array))
-    for i in range(len(array)):
-        res[i] = array[i]
-    for j in range(n):
-        for i in range(len(array) - 1):
-            res[i] = array[i + 1]
-        res[-1] = 0
-        array = res
-    return res
-
-
-def bytestring2bitarray(input_string):
-    bits_input_string = bitarray()
-    for char in input_string:
-        aa = ''.join(['0'] * (8 - len(bin(char)[2:])))
-        bits_input_string += aa + bin(char)[2:]
-    return bits_input_string
+def left_shift(block, n):
+    b = block if block.__class__ is bitarray else bitarray(block)
+    return b << n
 
 
 def F(left, key):
     return left_shift(left, 9) ^ (~(right_shift(key, 11) & left))
 
 
-def get_K_i(K, i):
-    return right_shift(K, i * 8)[:32]
+def preprocess(arr):
+    ba = bitarray(endian='big')
+    ba.frombytes(arr)
+    return ba
 
 
-def encrypt(plaintext, key, n=2, size_block=64):
-    for i in range(n):
+class Cipher:
+    def __init__(self, key, rounds=8, block_size=64):
+        self.block_size = block_size
+        self.rounds = rounds
+
+        ba = bitarray(endian='big')
+
+        self.key = key
+        ba.frombytes(self.key)
+        self.bkey = ba
+
+    def key(self):
+        return ba2int(self.bkey).to_bytes(self.bkey.nbytes, 'big').decode()
+
+    def align(self, s):
+        return s.ljust(math.ceil(math.ceil(8 * len(s) / self.block_size) * self.block_size / 8), b'\0')
+
+    def get_partitions(self, msg):
+        for i in range(len(msg) // self.block_size):
+            yield msg[self.block_size * i: self.block_size * (i + 1)]
+
+    def split_block(self, block, branches=2):
+        border = self.block_size // branches
+        return [block[border * i: border * (i + 1)] for i in range(branches)]
+
+    def get_Ki(self, key, i, num_branches):
+        return right_shift(key, i * 4)[:(self.block_size // num_branches)]
+
+    def encrypt(self, message):
+        msg = preprocess(self.align(message))
         res = bitarray()
-        k_i = get_K_i(key, i)
-        for index_of_block in range(len(plaintext) // size_block):
-            block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-            left = block[0:size_block // 2]
-            right = block[size_block // 2: size_block]
-            temp = F(left, k_i) ^ right
-            if i == n - 1:
-                new_block = left + temp
-            else:
-                new_block = temp + left
-            res += new_block
-        plaintext = res
-    return plaintext
+        for block in self.get_partitions(msg):
+            x1, x2, x3, x4 = self.split_block(block, 4)
 
+            print("in block {}".format(ba2hex(block)))
 
-def decrypt(plaintext, key, n=2, size_block=64):
-    for i in range(n):
+            for i in range(self.rounds):
+                k_i = self.get_Ki(self.bkey, i, 4)
+
+                print("in {} x1 = {}; x2 = {}; x3 = {}; x4 = {}".format(i, ba2hex(x1), ba2hex(x2), ba2hex(x3),
+                                                                        ba2hex(x4)))
+
+                f = F(x1, k_i)
+                if i == self.rounds - 1:
+                    x1 = x1
+                    x2 = f ^ x2
+                    x3 = f ^ x3
+                    x4 = f ^ x4
+                else:
+                    x1_ = x1.copy()
+                    x1 = f ^ x2
+                    x2 = f ^ x3
+                    x3 = f ^ x4
+                    x4 = x1_
+
+                print("out {} x1 = {}; x2 = {}; x3 = {}; x4 = {}".format(i, ba2hex(x1), ba2hex(x2), ba2hex(x3),
+                                                                         ba2hex(x4)))
+
+            res += x1 + x2 + x3 + x4
+            print("out block {}".format(ba2hex(res)))
+            print("\n\n")
+
+        return res
+
+    def decrypt(self, message: bitarray):
+        msg = message
         res = bitarray()
-        k_i = get_K_i(key, n - i - 1)
-        for index_of_block in range(len(plaintext) // size_block):
-            block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-            left = block[0:size_block // 2]
-            right = block[size_block // 2: size_block]
-            temp = F(left, k_i) ^ right
-            if i == n - 1:
-                new_block = left + temp
-            else:
-                new_block = temp + left
-            res += new_block
-        plaintext = res
-    return plaintext
+        for block in self.get_partitions(msg):
+            x1, x2, x3, x4 = self.split_block(block, 4)
+
+            print("in block {}".format(ba2hex(block)))
+
+            for i in reversed(range(self.rounds)):
+                k_i = self.get_Ki(self.bkey, i, 4)
+
+                print("in {} x1 = {}; x2 = {}; x3 = {}; x4 = {}".format(i, ba2hex(x1), ba2hex(x2), ba2hex(x3),
+                                                                        ba2hex(x4)))
+
+                f = F(x1, k_i)
+                if i == 0:
+                    x1 = x1
+                    x2 = f ^ x2
+                    x3 = f ^ x3
+                    x4 = f ^ x4
+                else:
+                    x1_ = x1.copy()
+                    x1 = f ^ x4
+                    x4 = f ^ x3
+                    x3 = f ^ x2
+                    x2 = x1_
+
+                print("out {} x1 = {}; x2 = {}; x3 = {}; x4 = {}".format(i, ba2hex(x1), ba2hex(x2), ba2hex(x3),
+                                                                         ba2hex(x4)))
+
+            res += x1 + x2 + x3 + x4
+            print("out block {}".format(ba2hex(res)))
+            print("\n\n")
+        return res
 
 
-input_string = b'Very very secret text'
-input_string = bytes([0] * (8 - len(input_string) % 8)) + input_string
-binput_string = bytestring2bitarray(input_string)
-key = bytearray(os.urandom(8))
-bkey = bytestring2bitarray(key)
-n = 10
+if __name__ == '__main__':
+    input_string = bytes('Самый главный секрет ФКНа', 'utf8')
 
-print('исходн:', binput_string)
-print('_ключ_:', bkey)
-print('зашфрв:', encrypt(binput_string, bkey, n))
-print('расшфр:', decrypt(encrypt(binput_string, bkey, n), bkey, n))
-print('текст: ', ba2int(decrypt(encrypt(binput_string, bkey, n), bkey, n)).to_bytes(21, 'big').decode())
+    c = Cipher(key=os.urandom(8), block_size=128, rounds=12)
+    C = c.encrypt(input_string)
+    M = c.decrypt(C.copy())
+
+    # t = preprocess(input_string)
+    print('Исходное сообщение: {}'.format(input_string))
+    print('Ключ К: {}'.format(ba2hex(c.bkey)))
+    print('Зашифрованное сообщение: ', ba2int(C).to_bytes(C.nbytes, 'big').decode('latin1'))
+    print('Расшифрованное сообщение: ', ba2int(M).to_bytes(M.nbytes, 'big')[:len(input_string)].decode())

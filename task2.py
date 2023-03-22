@@ -1,153 +1,195 @@
+import math
 import os
 
 from bitarray._bitarray import bitarray
-from bitarray.util import *
+from bitarray.util import ba2int, ba2hex
 
 
-def right_shift(array, n):
-    res = bitarray(len(array))
-    for i in range(len(array)):
-        res[i] = array[i]
-    for j in range(n):
-        for i in reversed(range(1, len(array))):
-            res[i] = array[i - 1]
-        res[0] = 0
-        array = res
-    return res
+def right_shift(block, n):
+    b = block if block.__class__ is bitarray else bitarray(block)
+    return b >> n
 
 
-def left_shift(array, n):
-    res = bitarray(len(array))
-    for i in range(len(array)):
-        res[i] = array[i]
-    for j in range(n):
-        for i in range(len(array) - 1):
-            res[i] = array[i + 1]
-        res[-1] = 0
-        array = res
-    return res
-
-
-def bytestring2bitarray(input_string):
-    bits_input_string = bitarray()
-    for char in input_string:
-        aa = ''.join(['0'] * (8 - len(bin(char)[2:])))
-        bits_input_string += aa + bin(char)[2:]
-    return bits_input_string
+def left_shift(block, n):
+    b = block if block.__class__ is bitarray else bitarray(block)
+    return b << n
 
 
 def F(left, key):
     return left_shift(left, 9) ^ (~(right_shift(key, 11) & left))
 
 
-def get_K_i(K, i):
-    return right_shift(K, i * 8)[:32]
+def preprocess(arr):
+    ba = bitarray(endian='big')
+    ba.frombytes(arr)
+    return ba
 
 
-def encrypt_block(block, key, n=2):
-    size_block = len(block)
-    for i in range(n):
+class Cipher:
+    def __init__(self, key, rounds=8, block_size=64):
+        self.block_size = block_size
+        self.rounds = rounds
+
+        ba = bitarray(endian='big')
+
+        self.key = key
+        ba.frombytes(self.key)
+        self.bkey = ba
+
+    def key(self):
+        return ba2int(self.bkey).to_bytes(self.bkey.nbytes, 'big').decode()
+
+    def align(self, s):
+        return s.ljust(math.ceil(math.ceil(8 * len(s) / self.block_size) * self.block_size / 8), b'\0')
+
+    def get_partitions(self, msg):
+        for i in range(len(msg) // self.block_size):
+            yield msg[self.block_size * i: self.block_size * (i + 1)]
+
+    def split_block(self, block, branches=2):
+        border = self.block_size // branches
+        return [block[border * i: border * (i + 1)] for i in range(branches)]
+
+    def get_Ki(self, key, i, num_branches):
+        return right_shift(key, i * 4)[:(self.block_size // num_branches)]
+
+    def encrypt(self, message):
+        msg = preprocess(self.align(message))
         res = bitarray()
-        k_i = get_K_i(key, i)
-        left = block[0: size_block // 2]
-        right = block[size_block // 2: size_block]
-        temp = F(left, k_i) ^ right
-        if i == n - 1:
-            new_block = left + temp
-        else:
-            new_block = temp + left
-        res += new_block
-        block = res
-    return block
+        for block in self.get_partitions(msg):
+            res += self.encrypt_block(block)
 
+        return res
 
-def decrypt_block(block, key, n=2):
-    size_block = len(block)
-    for i in range(n):
+    def encrypt_block(self, block):
+        x1, x2, x3, x4 = self.split_block(block, 4)
+        for i in range(self.rounds):
+            k_i = self.get_Ki(self.bkey, i, 4)
+
+            f = F(x1, k_i)
+            if i == self.rounds - 1:
+                x1 = x1
+                x2 = f ^ x2
+                x3 = f ^ x3
+                x4 = f ^ x4
+            else:
+                x1_ = x1.copy()
+                x1 = f ^ x2
+                x2 = f ^ x3
+                x3 = f ^ x4
+                x4 = x1_
+
+        return x1 + x2 + x3 + x4
+
+    def decrypt(self, message: bitarray):
+        msg = message
         res = bitarray()
-        k_i = get_K_i(key, n - i - 1)
-        left = block[0: size_block // 2]
-        right = block[size_block // 2: size_block]
-        temp = F(left, k_i) ^ right
-        if i == n - 1:
-            new_block = left + temp
-        else:
-            new_block = temp + left
-        res += new_block
-        block = res
-    return block
+        for block in self.get_partitions(msg):
+            res += self.decrypt_block(block)
+        return res
+
+    def decrypt_block(self, block):
+        x1, x2, x3, x4 = self.split_block(block, 4)
+        for i in reversed(range(self.rounds)):
+            k_i = self.get_Ki(self.bkey, i, 4)
+
+            f = F(x1, k_i)
+            if i == 0:
+                x1 = x1
+                x2 = f ^ x2
+                x3 = f ^ x3
+                x4 = f ^ x4
+            else:
+                x1_ = x1.copy()
+                x1 = f ^ x4
+                x4 = f ^ x3
+                x3 = f ^ x2
+                x2 = x1_
+
+        return x1 + x2 + x3 + x4
+
+    def encrypt_CBC(self, message, IV):
+        res = bitarray()
+        for i, block in enumerate(self.get_partitions(preprocess(self.align(message)))):
+            if i == 0:
+                block ^= IV
+            else:
+                block ^= res[self.block_size * (i - 1): self.block_size * i]
+            res += self.encrypt_block(block)
+        return res
+
+    def decrypt_CBC(self, ba, IV):
+        res = bitarray()
+        for i, block in enumerate(self.get_partitions(ba)):
+            decrypted_block = self.decrypt_block(block)
+            if i == 0:
+                decrypted_block ^= IV
+            else:
+                decrypted_block ^= ba[self.block_size * (i - 1): self.block_size * i]
+
+            res += decrypted_block
+        return res
+
+    def encrypt_CFB(self, message, IV):
+        message = preprocess(self.align(message))
+        res = bitarray()
+        for i, block in enumerate(self.get_partitions(message)):
+            if i == 0:
+                decrypted_block = self.encrypt_block(IV) ^ block
+            else:
+                decrypted_block = self.encrypt_block(res[self.block_size * (i - 1): self.block_size * i]) ^ block
+
+            res += decrypted_block
+        return res
+
+    def decrypt_CFB(self, ba, IV):
+        res = bitarray()
+        for i, block in enumerate(self.get_partitions(ba)):
+            if i == 0:
+                decrypted_block = self.encrypt_block(IV) ^ block
+            else:
+                decrypted_block = self.encrypt_block(ba[self.block_size * (i - 1): self.block_size * i]) ^ block
+
+            res += decrypted_block
+        return res
 
 
-def encrypt_CBC(plaintext, key, IV, n=2, size_block=64):
-    res = bitarray()
-    for index_of_block in range(len(plaintext) // size_block):
-        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-        if index_of_block == 0:
-            block = block ^ IV
-        else:
-            block = block ^ res[size_block * (index_of_block - 1): size_block * index_of_block]
-        encrypted_block = encrypt_block(block, key, n)
-        res += encrypted_block
-    return res
+if __name__ == '__main__':
+    input_string = bytes('Самый главный секрет ФКНа', 'utf8')
 
+    c = Cipher(key=os.urandom(8), block_size=64, rounds=10)
+    C = c.encrypt(input_string)
+    M = c.decrypt(C.copy())
 
-def decrypt_CBC(plaintext, key, IV, n=2, size_block=64):
-    res = bitarray()
-    for index_of_block in range(len(plaintext) // size_block):
-        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-        decrypted_block = decrypt_block(block, key, n)
-        if index_of_block == 0:
-            decrypted_block = decrypted_block ^ IV
-        else:
-            decrypted_block = decrypted_block ^ plaintext[size_block * (index_of_block - 1): size_block * index_of_block]
+    t = preprocess(input_string)
+    print('Исходное сообщение: {1}'.format(input_string, ba2hex(t)))
+    print('Ключ К: {}'.format(ba2hex(c.bkey)))
+    print('Зашифрованное сообщение: {1}'.format(ba2int(C).to_bytes(C.nbytes, 'big').decode('latin1'), ba2hex(C)))
+    print('Расшифрованное сообщение: {0} = {1}'.format(ba2int(M).to_bytes(M.nbytes, 'big')[:len(input_string)].decode(),
+                                                       ba2hex(M)))
 
-        res += decrypted_block
-    return res
+    ba = bitarray(endian='big')
+    ba.frombytes(os.urandom(8))
+    IV = ba
 
+    print('-------------------CBC----------------')
+    C_CBC = c.encrypt_CBC(input_string, IV)
+    M_CBC = c.decrypt_CBC(C_CBC, IV)
 
+    print('Исходное сообщение: {1}'.format(input_string, ba2hex(t)))
+    print('Ключ К: {}'.format(ba2hex(c.bkey)))
+    print('Зашифрованное сообщение: {1}'.format(ba2int(C_CBC).to_bytes(C_CBC.nbytes, 'big').decode('latin1'),
+                                                ba2hex(C_CBC)))
+    print('Расшифрованное сообщение: {0} = {1}'.format(
+        ba2int(M_CBC).to_bytes(M_CBC.nbytes, 'big')[:len(input_string)].decode(),
+        ba2hex(M_CBC)))
 
-def encrypt_CFB(plaintext, key, IV, n=2, size_block=64):
-    res = bitarray()
-    for index_of_block in range(len(plaintext) // size_block):
-        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-        if index_of_block == 0:
-            encrypted_block = encrypt_block(IV, key, n)
-        else:
-            encrypted_block = encrypt_block(res[size_block * (index_of_block - 1): size_block * index_of_block], key, n)
-        encrypted_block = encrypted_block ^ block
-        res += encrypted_block
-    return res
+    print('-------------------CFB----------------')
+    C_CFB = c.encrypt_CFB(input_string, IV)
+    M_CFB = c.decrypt_CFB(C_CFB, IV)
 
-
-def decrypt_CFB(plaintext, key, IV, n=2, size_block=64):
-    res = bitarray()
-    for index_of_block in range(len(plaintext) // size_block):
-        block = plaintext[size_block * index_of_block: size_block * (index_of_block + 1)]
-        if index_of_block == 0:
-            decrypted_block = encrypt_block(IV, key, n) ^ block
-        else:
-            decrypted_block = encrypt_block(plaintext[size_block * (index_of_block - 1): size_block * index_of_block], key, n) ^ block
-
-        res += decrypted_block
-    return res
-
-
-input_string = b'Very very secret text'
-input_string = bytes([0] * (8 - len(input_string) % 8)) + input_string
-binput_string = bytestring2bitarray(input_string)
-key = bytearray(os.urandom(8))
-bkey = bytestring2bitarray(key)
-n = 10
-
-IV = bytestring2bitarray(bytearray(os.urandom(8)))
-
-print('исходн:', binput_string)
-print('_ключ_:', bkey)
-print('CBC')
-print('зашфрв:', encrypt_CBC(binput_string, bkey, IV, n))
-print('расшфр:', decrypt_CBC(encrypt_CBC(binput_string, bkey, IV, n), bkey, IV, n))
-print('текст: ', ba2int(decrypt_CBC(encrypt_CBC(binput_string, bkey, IV, n), bkey, IV, n)).to_bytes(21, 'big').decode())
-print('CFB')
-print('зашфрв:', encrypt_CFB(binput_string, bkey, IV, n))
-print('расшфр:', decrypt_CFB(encrypt_CFB(binput_string, bkey, IV, n), bkey, IV, n))
-print('текст: ', ba2int(decrypt_CFB(encrypt_CFB(binput_string, bkey, IV, n), bkey, IV, n)).to_bytes(21, 'big').decode())
+    print('Зашифрованное сообщение: {1}'.format(ba2int(C_CFB).to_bytes(C_CFB.nbytes, 'big').decode('latin1'),
+                                                ba2hex(C_CFB)))
+    print('Расшифрованное сообщение: {0} = {1}'.format(
+        ba2int(M_CFB).to_bytes(M_CFB.nbytes, 'big')[:len(input_string)].decode(),
+        ba2hex(M_CFB)))
